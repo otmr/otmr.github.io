@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>don't stop the music</title>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <audio id="dontstopthemusic" autoplay>
+      <source src="/media/dontstopthemusic-otmr.mp3" type="audio/mpeg">
+    </audio>
+    <script>
+      let playCount = 1;
+
+      const images = [
+        "/media/img-dontstopthemusic-2025-04-16-1142am.PNG",
+        "/media/img-dontstopthemusic-2025-04-16-1144am.PNG",
+        "/media/img-dontstopthemusic-2025-04-16-925am.PNG",
+        "/media/img-dontstopthemusic-2025-04-17-1104pm-2.JPG",
+        "/media/img-dontstopthemusic-2025-04-17-1104pm-3.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1104pm-4.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1104pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1107am.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1107pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1120am-2.jpg",
+        "/media/img-dontstopthemusic-2025-04-17-1120am.jpg",
+        "/media/img-dontstopthemusic-2025-04-18-1215pm-2.jpg",
+        "/media/img-dontstopthemusic-2025-04-18-1215pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-22-135pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1037pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1038pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1040pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1041pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1051pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1118am.JPG",
+        "/media/img-dontstopthemusic-2025-04-29-1119am.JPG",
+        "/media/img-dontstopthemusic-2025-04-29-1120am.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1130am.JPG",
+        "/media/img-dontstopthemusic-2025-04-29-1134am.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1136am.JPG",
+        "/media/img-dontstopthemusic-2025-04-29-1137am.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1201pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1205pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1208pm.PNG",
+        "/media/img-dontstopthemusic-2025-04-29-1211pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1212pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1215pm.jpg",
+        "/media/img-dontstopthemusic-2025-04-29-1217pm.jpg"
+      ];
+
+      var image = new Image();
+
+      function changeImage() {
+        var randomNum = Math.floor(Math.random() * images.length);
+        image.src = images[randomNum];
+
+        var iw, ih;
+
+        var easeInOut = function (x, pow) {
+          x = x < 0 ? 0 : x > 1 ? 1 : x;
+          var xx = Math.pow(x, pow);
+          return xx / (xx + Math.pow(1 - x, pow));
+        };
+
+        function display() {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.globalAlpha = 1;
+          ctx.clearRect(0, 0, w, h);
+          if (image.complete) {
+            if (ih === undefined) {
+              ih = image.height;
+              iw = image.width;
+            }
+            var step = 1 / canvas.height;
+            var istep = ih / canvas.height;
+            var rstep = 0;
+            var y = 0;
+            var yh = 0;
+            var cH = canvas.height;
+            var curve = Math.sin(globalTime / 1020) + 1.2;
+            var curve2 = Math.sin(globalTime / 2217) + 1.4;
+            var curve3 = Math.sin(globalTime / 533) * Math.PI;
+            var curve4 = (Math.sin(globalTime / 731) + 1.1) * Math.PI;
+            var wave = 4 / (Math.PI * 1);
+            var wave1 = curve4 / (Math.PI * 1);
+            for (var i = 0; i < 1; i += step) {
+              var wob = Math.sin(i * wave);
+              var wide = (Math.sin(i * wave1 * 3 + curve3) + 1.0) * 100;
+              y = easeInOut(easeInOut(wob, curve), curve2);
+              yh = easeInOut(easeInOut(wob + step, curve), curve2) - y;
+              y *= ih;
+              yh *= ih;
+              ctx.drawImage(
+                image,
+                wide,
+                y,
+                iw - wide * 2,
+                yh,
+                0,
+                i * cH,
+                canvas.width,
+                step * cH
+              );
+              ctx.font = "bold 33px Brush Script MT";
+              var coord1 = Math.floor(Math.random() * (canvas.width*23));
+              var coord2 = Math.floor(Math.random() * (canvas.height*23));
+              ctx.fillText("don't  stop  the  music " + playCount,coord1,coord2);
+            }
+          }
+        }
+
+        function update(timer) {
+          globalTime = timer;
+          display();
+          requestAnimationFrame(update);
+        }
+
+        const RESIZE_DEBOUNCE_TIME = 100;
+
+        var w,
+          h,
+          cw,
+          ch,
+          canvas,
+          ctx,
+          createCanvas,
+          resizeCanvas,
+          setGlobals,
+          globalTime = 0,
+          resizeCount = 0;
+
+        createCanvas = function () {
+          var c, cs;
+          cs = (c = document.createElement("canvas")).style;
+          cs.position = "absolute";
+          cs.top = cs.left = "0px";
+          cs.zIndex = 1000;
+          document.body.appendChild(c);
+          return c;
+        };
+
+        resizeCanvas = function () {
+          if (canvas === undefined) {
+            canvas = createCanvas();
+          }
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          ctx = canvas.getContext("2d");
+          if (typeof setGlobals === "function") {
+            setGlobals();
+          }
+          if (typeof onResize === "function") {
+            resizeCount += 1;
+            setTimeout(debounceResize, RESIZE_DEBOUNCE_TIME);
+          }
+        };
+
+        function debounceResize() {
+          resizeCount -= 1;
+          if (resizeCount <= 0) {
+            onResize();
+          }
+        }
+        setGlobals = function () {
+          cw = (w = canvas.width) / 2;
+          ch = (h = canvas.height) / 2;
+        };
+
+        resizeCanvas();
+        window.addEventListener("resize", resizeCanvas);
+        requestAnimationFrame(update);
+      }
+
+      const audio = document.getElementById('dontstopthemusic');
+
+      audio.addEventListener('ended', function(){
+        changeImage();
+        playCount++;
+        audio.play();
+      });
+
+      changeImage();
+    </script>
+  </body>
+</html>
