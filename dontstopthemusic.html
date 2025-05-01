@@ -172,6 +172,10 @@
 
       const audio = document.getElementById('dontstopthemusic');
 
+      if (audio.paused || !audio.currentTime > 0) {
+        audio.controls = true;
+      }
+
       audio.addEventListener('ended', function(){
         changeImage();
         playCount++;
