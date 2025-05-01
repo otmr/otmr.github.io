@@ -2,6 +2,12 @@
 <html>
   <head>
     <title>don't stop the music</title>
+    <style>
+      body {
+        background-image: url(/media/img-dontstopthemusic-2025-04-16-925am.PNG);
+        background-repeat: no-repeat;
+      }
+    </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
@@ -172,15 +178,18 @@
 
       const audio = document.getElementById('dontstopthemusic');
 
-      if (audio.paused || !audio.currentTime > 0) {
-        audio.controls = true;
-      } else {
-        changeImage();
+      function autoplayCheck () {
+        if (audio.paused || !audio.currentTime > 0) {
+          audio.controls = true;
+        }
       }
 
+      setTimeout(autoplayCheck, 1000); 
+      
       audio.addEventListener('play', function () {
         changeImage();
-      });
+        audio.controls = false;
+      }, { once: true });
 
       audio.addEventListener('ended', function () {
         changeImage();
