@@ -5,7 +5,7 @@
     <style>
       body {
         background-image: url(/media/img-dontstopthemusic-2025-04-16-925am.PNG);
-        background-repeat: no-repeat;
+        background-repeat: repeat;
       }
     </style>
   </head>
@@ -107,8 +107,9 @@
                 step * cH
               );
               ctx.font = "bold 33px Brush Script MT";
-              var coord1 = Math.floor(Math.random() * (canvas.width*23));
-              var coord2 = Math.floor(Math.random() * (canvas.height*23));
+              ctx.fillStyle = "RGB(119,119,102)";
+              var coord1 = Math.floor(Math.random() * (canvas.width*20));
+              var coord2 = Math.floor(Math.random() * (canvas.height*20));
               ctx.fillText("don't  stop  the  music " + playCount,coord1,coord2);
             }
           }
