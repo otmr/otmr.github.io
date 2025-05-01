@@ -174,15 +174,19 @@
 
       if (audio.paused || !audio.currentTime > 0) {
         audio.controls = true;
+      } else {
+        changeImage();
       }
 
-      audio.addEventListener('ended', function(){
+      audio.addEventListener('play', function () {
+        changeImage();
+      });
+
+      audio.addEventListener('ended', function () {
         changeImage();
         playCount++;
         audio.play();
       });
-
-      changeImage();
     </script>
   </body>
 </html>
