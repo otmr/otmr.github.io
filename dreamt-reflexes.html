@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dreamt reflexes</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #0c0c10;
+    color: #ddd;
+    font-family: -apple-system, system-ui, sans-serif;
+    height: 100%;
+    overflow: hidden;
+  }
+  #stage-wrap {
+    position: relative;
+    width: 100vmin;
+    height: 100vmin;
+    margin: 0 auto;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .part {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    will-change: transform, filter, opacity;
+  }
+
+  /* Controls */
+  #controls {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(20,20,26,0.85);
+    backdrop-filter: blur(10px);
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.08);
+    z-index: 10;
+  }
+  #playBtn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: #e8e8ec;
+    color: #111;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #playBtn:hover { background: #fff; }
+  .label { font-size: 12px; color: #999; min-width: 80px; }
+  #chaosRange { width: 110px; }
+
+  #title {
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: lowercase;
+    color: #777;
+    z-index: 10;
+    pointer-events: none;
+  }
+
+  #debug {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    font-size: 10px;
+    color: #555;
+    font-family: monospace;
+    text-align: right;
+    line-height: 1.5;
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="title">dreamt reflexes</div>
+<div id="debug"></div>
+
+<div id="stage-wrap">
+  <div id="stage">
+    <!-- Order matters: back to front -->
+    <img class="part" id="p-armLeft"  src="assets/armLeft.png"  alt="">
+    <img class="part" id="p-armRight" src="assets/armRight.png" alt="">
+    <img class="part" id="p-legLeft"  src="assets/legLeft.png"  alt="">
+    <img class="part" id="p-legRight" src="assets/legRight.png" alt="">
+    <img class="part" id="p-torso"    src="assets/torso.png"    alt="">
+    <img class="part" id="p-neck"     src="assets/neck.png"     alt="">
+    <img class="part" id="p-guy"      src="assets/guy.png"      alt="">
+    <img class="part" id="p-face"     src="assets/face.png"     alt="">
+    <img class="part" id="p-eyes"     src="assets/eyes.png"     alt="">
+    <img class="part" id="p-mouth"    src="assets/mouth.png"    alt="">
+  </div>
+</div>
+
+<div id="controls">
+  <button id="playBtn">▶</button>
+  <span class="label" id="timeLabel">0:00 / 0:00</span>
+  <span class="label">chaos</span>
+  <input type="range" id="chaosRange" min="0" max="100" value="55">
+</div>
+
+<audio id="audio" src="assets/dreamtreflexes-otmr.m4a" preload="auto"></audio>
+
+<script>
+/* ============================================================
+   DREAMT REFLEXES — audio-reactive limb performer
+   ============================================================
+   Core idea: each limb is an independent "performer" that rolls
+   its own probability of firing a hit each frame, weighted by
+   live audio energy in its assigned frequency band. No shared
+   clock, no fixed pattern -> chaotic, non-repeating motion.
+   ============================================================ */
+
+const audio = document.getElementById('audio');
+const playBtn = document.getElementById('playBtn');
+const timeLabel = document.getElementById('timeLabel');
+const chaosRange = document.getElementById('chaosRange');
+const debugEl = document.getElementById('debug');
+
+let audioCtx, analyser, sourceNode, freqData;
+const FFT_SIZE = 1024; // higher res than the simple demo - we need finer band slicing
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = FFT_SIZE;
+  analyser.smoothingTimeConstant = 0.75; // a bit of smoothing so triggers aren't too twitchy/noisy
+  sourceNode = audioCtx.createMediaElementSource(audio);
+  sourceNode.connect(analyser);
+  analyser.connect(audioCtx.destination);
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+}
+
+playBtn.addEventListener('click', async () => {
+  initAudio();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  if (audio.paused) {
+    audio.play();
+    playBtn.textContent = '⏸';
+  } else {
+    audio.pause();
+    playBtn.textContent = '▶';
+  }
+});
+
+audio.addEventListener('timeupdate', () => {
+  const fmt = t => `${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
+  timeLabel.textContent = `${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
+});
+
+/* ----------------------------------------------------------
+   Frequency band helper
+   Each limb "listens" to a different slice of the spectrum,
+   roughly: legs = low/sub-bass (kick-like), arms = low-mid
+   (snare/perc-like), head = high-mid (cymbal/air-like).
+   Indices are bins, not Hz - with fftSize 1024 @ 44.1-48kHz,
+   each bin is roughly ~43-47Hz wide.
+---------------------------------------------------------- */
+function bandAvg(data, startBin, endBin) {
+  let sum = 0;
+  for (let i = startBin; i < endBin; i++) sum += data[i];
+  return sum / (endBin - startBin) / 255; // normalized 0-1
+}
+
+/* ----------------------------------------------------------
+   Performer class: one per limb/group.
+   Each frame: sample its band -> energy (0-1)
+   probability of firing this frame = energy * chaos * baseRate
+   When fired (and not already mid-motion): play its hit motion.
+---------------------------------------------------------- */
+class Performer {
+  constructor(el, { bandStart, bandEnd, baseRate, motion, originPct }) {
+    this.el = el;
+    this.bandStart = bandStart;
+    this.bandEnd = bandEnd;
+    this.baseRate = baseRate;       // tunable per-limb "twitchiness"
+    this.motion = motion;           // function(progress 0-1, intensity) -> {x,y,rot,scale}
+    this.firing = false;
+    this.startTime = 0;
+    this.duration = 0;
+    this.intensity = 0;
+    el.style.transformOrigin = originPct || '50% 50%';
+  }
+
+  maybeFire(energy, chaos, now) {
+    if (this.firing) return;
+    // Probability scales with energy and global chaos slider.
+    // Squaring energy makes quiet moments rarer and loud moments punchier.
+    const p = Math.pow(energy, 1.6) * this.baseRate * chaos;
+    if (Math.random() < p) {
+      this.firing = true;
+      this.startTime = now;
+      this.intensity = 0.4 + energy * 0.6; // hit size scales with how loud the trigger was
+      // dreamlike: slight randomized duration so repeats never feel identical
+      this.duration = 220 + Math.random() * 260; // ms
+    }
+  }
+
+  update(now) {
+    if (!this.firing) return;
+    const t = now - this.startTime;
+    let progress = t / this.duration;
+    if (progress >= 1) {
+      this.firing = false;
+      this.el.style.transform = 'translate(0,0) rotate(0deg) scale(1)';
+      this.el.style.filter = 'none';
+      return;
+    }
+    // Reflex easing: sharp attack (fast out), slow dreamy decay (drift back)
+    // attack: 0 -> 0.25 of duration, decay: rest
+    const attackEnd = 0.25;
+    let eased;
+    if (progress < attackEnd) {
+      const a = progress / attackEnd;
+      eased = easeOutQuad(a); // snap out fast
+    } else {
+      const d = (progress - attackEnd) / (1 - attackEnd);
+      eased = 1 - easeInOutCubic(d); // drift back slowly, dreamlike
+    }
+    const { x, y, rot, scale } = this.motion(eased, this.intensity);
+    this.el.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg) scale(${scale})`;
+    // subtle blur on the fastest part of the motion for a dreamy trail feel
+    const blur = eased > 0.8 ? (eased - 0.8) * 10 : 0;
+    this.el.style.filter = blur > 0 ? `blur(${blur.toFixed(1)}px)` : 'none';
+  }
+}
+
+function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3) / 2; }
+
+/* ----------------------------------------------------------
+   Motion definitions
+   Stage is 100vmin x 100vmin; figure roughly fills it since
+   source canvases are square. Displacement values are in px
+   relative to the stage's own coordinate system (we use vmin
+   via JS measurement below so it scales with screen size).
+---------------------------------------------------------- */
+function vmin(pct) {
+  return Math.min(window.innerWidth, window.innerHeight) * (pct / 100);
+}
+
+const performers = [];
+
+function buildPerformers() {
+  performers.length = 0;
+
+  // LEFT LEG — kick out and back (from clip B)
+  performers.push(new Performer(document.getElementById('p-legLeft'), {
+    bandStart: 1, bandEnd: 6,      // sub/low-bass
+    baseRate: 0.020,
+    originPct: '60% 15%',          // roughly hip area
+    motion: (p, inten) => ({
+      x: -vmin(6) * p * inten,
+      y: vmin(4) * p * inten,
+      rot: -10 * p * inten,
+      scale: 1 + 0.03 * p * inten
+    })
+  }));
+
+  // RIGHT LEG — flutter/tap in place (from clip C)
+  performers.push(new Performer(document.getElementById('p-legRight'), {
+    bandStart: 2, bandEnd: 8,
+    baseRate: 0.035,                // higher rate: quick little taps
+    originPct: '40% 10%',
+    motion: (p, inten) => ({
+      x: vmin(1.5) * Math.sin(p * Math.PI * 3) * inten,
+      y: vmin(2) * p * inten,
+      rot: 6 * Math.sin(p * Math.PI * 3) * inten,
+      scale: 1
+    })
+  }));
+
+  // LEFT ARM — drum/punch across torso (from clip D)
+  performers.push(new Performer(document.getElementById('p-armLeft'), {
+    bandStart: 6, bandEnd: 20,      // low-mid, snare/perc-ish
+    baseRate: 0.022,
+    originPct: '75% 30%',           // shoulder area
+    motion: (p, inten) => ({
+      x: -vmin(8) * p * inten,
+      y: vmin(3) * Math.sin(p * Math.PI) * inten,
+      rot: -18 * p * inten,
+      scale: 1
+    })
+  }));
+
+  // HEAD + RIGHT ARM (grouped) — swing up and over head (from clip E)
+  // We move neck/face/eyes/mouth/guy + armRight together as one rigid unit.
+  const headGroupEls = ['p-neck','p-face','p-eyes','p-mouth','p-guy','p-armRight']
+    .map(id => document.getElementById(id));
+  performers.push(new GroupPerformer(headGroupEls, {
+    bandStart: 20, bandEnd: 60,     // high-mid, cymbal/air-ish -> rarer, airier trigger
+    baseRate: 0.014,
+    originPct: '50% 20%',           // base of neck
+    motion: (p, inten) => ({
+      x: vmin(2) * p * inten,
+      y: -vmin(5) * p * inten,
+      rot: 14 * p * inten,
+      scale: 1 + 0.02 * p * inten
+    })
+  }));
+}
+
+/* Group variant: applies the same transform to multiple elements at once */
+class GroupPerformer extends Performer {
+  constructor(els, opts) {
+    super(els[0], opts); // base class machinery reused; el used only for transformOrigin default
+    this.els = els;
+    this.els.forEach(el => el.style.transformOrigin = opts.originPct);
+  }
+  update(now) {
+    if (!this.firing) { return; }
+    const t = now - this.startTime;
+    let progress = t / this.duration;
+    if (progress >= 1) {
+      this.firing = false;
+      this.els.forEach(el => { el.style.transform = 'translate(0,0) rotate(0deg) scale(1)'; el.style.filter = 'none'; });
+      return;
+    }
+    const attackEnd = 0.25;
+    let eased;
+    if (progress < attackEnd) {
+      eased = easeOutQuad(progress / attackEnd);
+    } else {
+      const d = (progress - attackEnd) / (1 - attackEnd);
+      eased = 1 - easeInOutCubic(d);
+    }
+    const { x, y, rot, scale } = this.motion(eased, this.intensity);
+    const blur = eased > 0.8 ? (eased - 0.8) * 10 : 0;
+    this.els.forEach(el => {
+      el.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg) scale(${scale})`;
+      el.style.filter = blur > 0 ? `blur(${blur.toFixed(1)}px)` : 'none';
+    });
+  }
+}
+
+buildPerformers();
+window.addEventListener('resize', buildPerformers);
+
+/* ----------------------------------------------------------
+   Main loop
+---------------------------------------------------------- */
+function loop() {
+  requestAnimationFrame(loop);
+  if (!analyser || audio.paused) return;
+
+  analyser.getByteFrequencyData(freqData);
+  const now = performance.now();
+  const chaos = chaosRange.value / 100 * 1.8; // 0-1.8 multiplier, slider centered around 1x at ~55
+
+  let debugLines = [];
+  for (const perf of performers) {
+    const energy = bandAvg(freqData, perf.bandStart, perf.bandEnd);
+    perf.maybeFire(energy, chaos, now);
+    perf.update(now);
+    debugLines.push(energy.toFixed(2));
+  }
+  debugEl.textContent = `bands: ${debugLines.join(' / ')}`;
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
