@@ -7,23 +7,28 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
-    background: #ffffff;
-    color: #333;
+    background: #05050a;
+    color: #ccc;
     font-family: -apple-system, system-ui, sans-serif;
     height: 100%;
     overflow: hidden;
   }
-  #stage-wrap {
-    position: relative;
-    width: 100vmin;
-    height: 100vmin;
-    margin: 0 auto;
-  }
-  #stage {
-    position: absolute;
+  /* Layered radial gradients + tiny repeating dots = lightweight starfield,
+     no image asset needed. Two star layers at different sizes/opacities
+     for a bit of depth. */
+  #stars {
+    position: fixed;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    z-index: 0;
+    background:
+      radial-gradient(ellipse at 20% 30%, rgba(120,90,200,0.12), transparent 60%),
+      radial-gradient(ellipse at 80% 70%, rgba(60,80,180,0.10), transparent 60%),
+      repeating-radial-gradient(circle at 10% 20%, #fff 0 1px, transparent 1px 60px),
+      repeating-radial-gradient(circle at 70% 60%, #fff 0 1px, transparent 1px 80px),
+      repeating-radial-gradient(circle at 40% 85%, #fff 0 1px, transparent 1px 100px),
+      #05050a;
+    background-size: 100% 100%, 100% 100%, 140px 140px, 180px 180px, 220px 220px, 100% 100%;
+    opacity: 0.8;
   }
   .part {
     position: absolute;
@@ -33,6 +38,23 @@
     height: 100%;
     object-fit: contain;
     will-change: transform, filter, opacity;
+    /* invert(1) flips black linework to white; the brightness/contrast
+       tweak keeps it from looking flat/grey on the deep space background */
+    filter: invert(1) brightness(1.3) contrast(1.1);
+  }
+  #stage-wrap {
+    position: relative;
+    width: 100vmin;
+    height: 100vmin;
+    margin: 0 auto;
+    overflow: visible;
+    z-index: 1;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   /* Controls */
@@ -65,36 +87,12 @@
   .label { font-size: 12px; color: #999; min-width: 80px; }
   #chaosRange { width: 110px; }
 
-  #title {
-    position: fixed;
-    top: 18px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 12px;
-    letter-spacing: 0.12em;
-    text-transform: lowercase;
-    color: #777;
-    z-index: 10;
-    pointer-events: none;
-  }
-
-  #debug {
-    position: fixed;
-    top: 16px;
-    right: 16px;
-    font-size: 10px;
-    color: #555;
-    font-family: monospace;
-    text-align: right;
-    line-height: 1.5;
-    z-index: 10;
-    pointer-events: none;
-  }
+  #debug { display: none; }
 </style>
 </head>
 <body>
 
-<div id="title">dreamt reflexes</div>
+<div id="stars"></div>
 <div id="debug"></div>
 
 <div id="stage-wrap">
@@ -126,10 +124,22 @@
 /* ============================================================
    DREAMT REFLEXES — audio-reactive limb performer
    ============================================================
-   Core idea: each limb is an independent "performer" that rolls
-   its own probability of firing a hit each frame, weighted by
-   live audio energy in its assigned frequency band. No shared
-   clock, no fixed pattern -> chaotic, non-repeating motion.
+   Two-state system per limb:
+
+   DRIFT  - low/sparse-energy sections. Limb wanders slowly
+            toward a randomly changing target point out in
+            open space (off the body). Continuous, not hit-based.
+
+   DRUM   - triggered when the analyser detects a sustained
+            FLURRY of onsets (not just one loud moment) -
+            i.e. a "marching band" style burst of rapid hits.
+            Limb snaps back home and fires quick percussive
+            hits onto its target body part(s).
+
+   The mode is decided globally by a rolling onset-rate
+   detector (how many transients occurred in the last ~1.5s),
+   not by a hardcoded timestamp - so it adapts to wherever the
+   busy section actually falls in the track.
    ============================================================ */
 
 const audio = document.getElementById('audio');
@@ -139,14 +149,14 @@ const chaosRange = document.getElementById('chaosRange');
 const debugEl = document.getElementById('debug');
 
 let audioCtx, analyser, sourceNode, freqData;
-const FFT_SIZE = 1024; // higher res than the simple demo - we need finer band slicing
+const FFT_SIZE = 1024;
 
 function initAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = FFT_SIZE;
-  analyser.smoothingTimeConstant = 0.75; // a bit of smoothing so triggers aren't too twitchy/noisy
+  analyser.smoothingTimeConstant = 0.7;
   sourceNode = audioCtx.createMediaElementSource(audio);
   sourceNode.connect(analyser);
   analyser.connect(audioCtx.destination);
@@ -170,193 +180,234 @@ audio.addEventListener('timeupdate', () => {
   timeLabel.textContent = `${fmt(audio.currentTime)} / ${fmt(audio.duration||0)}`;
 });
 
-/* ----------------------------------------------------------
-   Frequency band helper
-   Each limb "listens" to a different slice of the spectrum,
-   roughly: legs = low/sub-bass (kick-like), arms = low-mid
-   (snare/perc-like), head = high-mid (cymbal/air-like).
-   Indices are bins, not Hz - with fftSize 1024 @ 44.1-48kHz,
-   each bin is roughly ~43-47Hz wide.
----------------------------------------------------------- */
 function bandAvg(data, startBin, endBin) {
   let sum = 0;
   for (let i = startBin; i < endBin; i++) sum += data[i];
-  return sum / (endBin - startBin) / 255; // normalized 0-1
+  return sum / (endBin - startBin) / 255;
 }
 
-/* ----------------------------------------------------------
-   Performer class: one per limb/group.
-   Each frame: sample its band -> energy (0-1)
-   probability of firing this frame = energy * chaos * baseRate
-   When fired (and not already mid-motion): play its hit motion.
----------------------------------------------------------- */
-class Performer {
-  constructor(el, { bandStart, bandEnd, baseRate, motion, originPct }) {
-    this.el = el;
-    this.bandStart = bandStart;
-    this.bandEnd = bandEnd;
-    this.baseRate = baseRate;       // tunable per-limb "twitchiness"
-    this.motion = motion;           // function(progress 0-1, intensity) -> {x,y,rot,scale}
-    this.firing = false;
-    this.startTime = 0;
-    this.duration = 0;
-    this.intensity = 0;
-    el.style.transformOrigin = originPct || '50% 50%';
-  }
-
-  maybeFire(energy, chaos, now) {
-    if (this.firing) return;
-    // Probability scales with energy and global chaos slider.
-    // Squaring energy makes quiet moments rarer and loud moments punchier.
-    const p = Math.pow(energy, 1.6) * this.baseRate * chaos;
-    if (Math.random() < p) {
-      this.firing = true;
-      this.startTime = now;
-      this.intensity = 0.4 + energy * 0.6; // hit size scales with how loud the trigger was
-      // dreamlike: slight randomized duration so repeats never feel identical
-      this.duration = 220 + Math.random() * 260; // ms
-    }
-  }
-
-  update(now) {
-    if (!this.firing) return;
-    const t = now - this.startTime;
-    let progress = t / this.duration;
-    if (progress >= 1) {
-      this.firing = false;
-      this.el.style.transform = 'translate(0,0) rotate(0deg) scale(1)';
-      this.el.style.filter = 'none';
-      return;
-    }
-    // Reflex easing: sharp attack (fast out), slow dreamy decay (drift back)
-    // attack: 0 -> 0.25 of duration, decay: rest
-    const attackEnd = 0.25;
-    let eased;
-    if (progress < attackEnd) {
-      const a = progress / attackEnd;
-      eased = easeOutQuad(a); // snap out fast
-    } else {
-      const d = (progress - attackEnd) / (1 - attackEnd);
-      eased = 1 - easeInOutCubic(d); // drift back slowly, dreamlike
-    }
-    const { x, y, rot, scale } = this.motion(eased, this.intensity);
-    this.el.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg) scale(${scale})`;
-    // subtle blur on the fastest part of the motion for a dreamy trail feel
-    const blur = eased > 0.8 ? (eased - 0.8) * 10 : 0;
-    this.el.style.filter = blur > 0 ? `blur(${blur.toFixed(1)}px)` : 'none';
-  }
-}
-
-function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
-function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3) / 2; }
-
-/* ----------------------------------------------------------
-   Motion definitions
-   Stage is 100vmin x 100vmin; figure roughly fills it since
-   source canvases are square. Displacement values are in px
-   relative to the stage's own coordinate system (we use vmin
-   via JS measurement below so it scales with screen size).
----------------------------------------------------------- */
 function vmin(pct) {
   return Math.min(window.innerWidth, window.innerHeight) * (pct / 100);
 }
 
-const performers = [];
+function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3) / 2; }
+function lerp(a, b, t) { return a + (b - a) * t; }
 
-function buildPerformers() {
-  performers.length = 0;
+/* ----------------------------------------------------------
+   GLOBAL ONSET / "BUSY-NESS" DETECTOR
+   Tracks broadband energy frame to frame. Whenever energy
+   jumps sharply above its recent rolling average, that's
+   counted as an "onset" (one drum hit, roughly).
+   We keep a timestamped list of onsets from the last 1.5s -
+   many onsets in that window = marching-band-style flurry.
+---------------------------------------------------------- */
+const onsetTimes = [];
+let prevBroadband = 0;
+let rollingAvg = 0;
+const ONSET_WINDOW_MS = 1500;
+const ONSET_THRESHOLD_FLURRY = 6; // # onsets in window to be considered "drumming" energy
 
-  // LEFT LEG — kick out and back (from clip B)
-  performers.push(new Performer(document.getElementById('p-legLeft'), {
-    bandStart: 1, bandEnd: 6,      // sub/low-bass
-    baseRate: 0.020,
-    originPct: '60% 15%',          // roughly hip area
-    motion: (p, inten) => ({
-      x: -vmin(6) * p * inten,
-      y: vmin(4) * p * inten,
-      rot: -10 * p * inten,
-      scale: 1 + 0.03 * p * inten
+function detectOnsetAndBusyness(data, now) {
+  const broadband = bandAvg(data, 1, 64); // wide sweep across low+mid, not just bass
+  rollingAvg = lerp(rollingAvg, broadband, 0.05);
+  const jump = broadband - rollingAvg;
+
+  if (jump > 0.05 && broadband > 0.12) {
+    onsetTimes.push(now);
+  }
+  // drop onsets older than the window
+  while (onsetTimes.length && now - onsetTimes[0] > ONSET_WINDOW_MS) {
+    onsetTimes.shift();
+  }
+  prevBroadband = broadband;
+  return {
+    broadband,
+    onsetCount: onsetTimes.length,
+    busy: onsetTimes.length >= ONSET_THRESHOLD_FLURRY
+  };
+}
+
+/* ----------------------------------------------------------
+   Limb performer with DRIFT / DRUM states
+---------------------------------------------------------- */
+const STATE_DRIFT = 'drift';
+const STATE_RETURNING = 'returning';
+const STATE_DRUM = 'drum';
+
+class Limb {
+  constructor(els, opts) {
+    this.els = Array.isArray(els) ? els : [els];
+    this.bandStart = opts.bandStart;
+    this.bandEnd = opts.bandEnd;
+    this.drumRate = opts.drumRate;          // hit probability per frame while in DRUM state
+    this.drumMotion = opts.drumMotion;      // (p, intensity) -> {x,y,rot,scale} - relative to home
+    this.driftRangeX = opts.driftRangeX;    // [min,max] vmin% for drift target
+    this.driftRangeY = opts.driftRangeY;
+    this.driftSpeed = opts.driftSpeed || 0.15; // how fast it eases toward drift target (per frame, 0-1)
+
+    this.els.forEach(el => el.style.transformOrigin = opts.originPct || '50% 50%');
+
+    this.state = STATE_DRIFT;
+    this.cur = { x: 0, y: 0, rot: 0, scale: 1 };           // current rendered transform
+    this.driftTarget = this.randomDriftTarget();
+    this.driftRot = 0;
+    this.driftRotTarget = (Math.random() - 0.5) * 16;
+
+    // drum sub-state
+    this.firing = false;
+    this.startTime = 0;
+    this.duration = 0;
+    this.intensity = 0;
+  }
+
+  randomDriftTarget() {
+    const [xMin, xMax] = this.driftRangeX;
+    const [yMin, yMax] = this.driftRangeY;
+    return {
+      x: vmin(lerp(xMin, xMax, Math.random())),
+      y: vmin(lerp(yMin, yMax, Math.random()))
+    };
+  }
+
+  setMode(busy) {
+    if (busy && this.state === STATE_DRIFT) {
+      this.state = STATE_RETURNING;
+    } else if (!busy && (this.state === STATE_DRUM || this.state === STATE_RETURNING)) {
+      this.state = STATE_DRIFT;
+      this.driftTarget = this.randomDriftTarget();
+      this.driftRotTarget = (Math.random() - 0.5) * 16;
+    }
+  }
+
+  maybeFireDrum(energy, chaos) {
+    if (this.firing) return;
+    const p = Math.pow(energy, 1.3) * this.drumRate * chaos;
+    if (Math.random() < p) {
+      this.firing = true;
+      this.startTime = performance.now();
+      this.intensity = 0.5 + energy * 0.5;
+      this.duration = 150 + Math.random() * 180; // snappier than drift - this is the "drumming" feel
+    }
+  }
+
+  apply(x, y, rot, scale, blur) {
+    const t = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) rotate(${rot.toFixed(1)}deg) scale(${scale.toFixed(3)})`;
+    // must include invert/brightness/contrast here too, since setting
+    // style.filter from JS overwrites the CSS filter entirely otherwise
+    const f = `invert(1) brightness(1.3) contrast(1.1) ${blur > 0.05 ? `blur(${blur.toFixed(1)}px)` : ''}`;
+    this.els.forEach(el => { el.style.transform = t; el.style.filter = f; });
+  }
+
+  update(energy, chaos, now) {
+    if (this.state === STATE_DRIFT) {
+      // slow wander toward a target that occasionally changes
+      if (Math.random() < 0.004) this.driftTarget = this.randomDriftTarget();
+      if (Math.random() < 0.004) this.driftRotTarget = (Math.random() - 0.5) * 16;
+      this.cur.x = lerp(this.cur.x, this.driftTarget.x, this.driftSpeed * 0.05);
+      this.cur.y = lerp(this.cur.y, this.driftTarget.y, this.driftSpeed * 0.05);
+      this.cur.rot = lerp(this.cur.rot, this.driftRotTarget, 0.01);
+      this.cur.scale = 1;
+      this.apply(this.cur.x, this.cur.y, this.cur.rot, this.cur.scale, 0);
+
+    } else if (this.state === STATE_RETURNING) {
+      // ease back to home (0,0) before drumming begins
+      this.cur.x = lerp(this.cur.x, 0, 0.12);
+      this.cur.y = lerp(this.cur.y, 0, 0.12);
+      this.cur.rot = lerp(this.cur.rot, 0, 0.12);
+      this.apply(this.cur.x, this.cur.y, this.cur.rot, 1, 0);
+      if (Math.abs(this.cur.x) < 2 && Math.abs(this.cur.y) < 2) {
+        this.state = STATE_DRUM;
+      }
+
+    } else if (this.state === STATE_DRUM) {
+      this.maybeFireDrum(energy, chaos);
+      if (this.firing) {
+        const t = now - this.startTime;
+        let progress = t / this.duration;
+        if (progress >= 1) {
+          this.firing = false;
+          this.apply(0, 0, 0, 1, 0);
+        } else {
+          const attackEnd = 0.3;
+          let eased;
+          if (progress < attackEnd) {
+            eased = easeOutQuad(progress / attackEnd);
+          } else {
+            eased = 1 - easeInOutCubic((progress - attackEnd) / (1 - attackEnd));
+          }
+          const { x, y, rot, scale } = this.drumMotion(eased, this.intensity);
+          const blur = eased > 0.8 ? (eased - 0.8) * 8 : 0;
+          this.apply(x, y, rot, scale, blur);
+        }
+      } else {
+        this.apply(0, 0, 0, 1, 0);
+      }
+    }
+  }
+}
+
+/* ----------------------------------------------------------
+   Build limbs
+---------------------------------------------------------- */
+let limbs = [];
+
+function buildLimbs() {
+  limbs = [];
+
+  limbs.push(new Limb(document.getElementById('p-legLeft'), {
+    bandStart: 1, bandEnd: 6,
+    drumRate: 0.05,
+    originPct: '60% 15%',
+    driftRangeX: [-18, 18], driftRangeY: [10, 38],
+    drumMotion: (p, inten) => ({
+      x: -vmin(6) * p * inten, y: vmin(4) * p * inten,
+      rot: -10 * p * inten, scale: 1 + 0.03 * p * inten
     })
   }));
 
-  // RIGHT LEG — flutter/tap in place (from clip C)
-  performers.push(new Performer(document.getElementById('p-legRight'), {
+  limbs.push(new Limb(document.getElementById('p-legRight'), {
     bandStart: 2, bandEnd: 8,
-    baseRate: 0.035,                // higher rate: quick little taps
+    drumRate: 0.08,
     originPct: '40% 10%',
-    motion: (p, inten) => ({
-      x: vmin(1.5) * Math.sin(p * Math.PI * 3) * inten,
-      y: vmin(2) * p * inten,
-      rot: 6 * Math.sin(p * Math.PI * 3) * inten,
-      scale: 1
+    driftRangeX: [-30, -8], driftRangeY: [8, 34],
+    drumMotion: (p, inten) => ({
+      x: vmin(1.5) * Math.sin(p * Math.PI * 3) * inten, y: vmin(2) * p * inten,
+      rot: 6 * Math.sin(p * Math.PI * 3) * inten, scale: 1
     })
   }));
 
-  // LEFT ARM — drum/punch across torso (from clip D)
-  performers.push(new Performer(document.getElementById('p-armLeft'), {
-    bandStart: 6, bandEnd: 20,      // low-mid, snare/perc-ish
-    baseRate: 0.022,
-    originPct: '75% 30%',           // shoulder area
-    motion: (p, inten) => ({
-      x: -vmin(8) * p * inten,
-      y: vmin(3) * Math.sin(p * Math.PI) * inten,
-      rot: -18 * p * inten,
-      scale: 1
+  limbs.push(new Limb(document.getElementById('p-armLeft'), {
+    bandStart: 6, bandEnd: 20,
+    drumRate: 0.055,
+    originPct: '75% 30%',
+    driftRangeX: [10, 36], driftRangeY: [-10, 20],
+    drumMotion: (p, inten) => ({
+      x: -vmin(8) * p * inten, y: vmin(3) * Math.sin(p * Math.PI) * inten,
+      rot: -18 * p * inten, scale: 1
     })
   }));
 
-  // HEAD + RIGHT ARM (grouped) — swing up and over head (from clip E)
-  // We move neck/face/eyes/mouth/guy + armRight together as one rigid unit.
+  // HEAD + RIGHT ARM grouped: now drums down onto the LEFT LEG instead of swinging over the head.
   const headGroupEls = ['p-neck','p-face','p-eyes','p-mouth','p-guy','p-armRight']
     .map(id => document.getElementById(id));
-  performers.push(new GroupPerformer(headGroupEls, {
-    bandStart: 20, bandEnd: 60,     // high-mid, cymbal/air-ish -> rarer, airier trigger
-    baseRate: 0.014,
-    originPct: '50% 20%',           // base of neck
-    motion: (p, inten) => ({
-      x: vmin(2) * p * inten,
-      y: -vmin(5) * p * inten,
-      rot: 14 * p * inten,
-      scale: 1 + 0.02 * p * inten
+  limbs.push(new Limb(headGroupEls, {
+    bandStart: 20, bandEnd: 60,
+    drumRate: 0.04,
+    originPct: '50% 20%',
+    driftRangeX: [-14, 22], driftRangeY: [-30, -8],
+    drumMotion: (p, inten) => ({
+      // head dips down and to the left, toward where the left leg sits
+      x: -vmin(3) * p * inten,
+      y: vmin(16) * p * inten,
+      rot: 10 * p * inten,
+      scale: 1 - 0.04 * p * inten
     })
   }));
 }
 
-/* Group variant: applies the same transform to multiple elements at once */
-class GroupPerformer extends Performer {
-  constructor(els, opts) {
-    super(els[0], opts); // base class machinery reused; el used only for transformOrigin default
-    this.els = els;
-    this.els.forEach(el => el.style.transformOrigin = opts.originPct);
-  }
-  update(now) {
-    if (!this.firing) { return; }
-    const t = now - this.startTime;
-    let progress = t / this.duration;
-    if (progress >= 1) {
-      this.firing = false;
-      this.els.forEach(el => { el.style.transform = 'translate(0,0) rotate(0deg) scale(1)'; el.style.filter = 'none'; });
-      return;
-    }
-    const attackEnd = 0.25;
-    let eased;
-    if (progress < attackEnd) {
-      eased = easeOutQuad(progress / attackEnd);
-    } else {
-      const d = (progress - attackEnd) / (1 - attackEnd);
-      eased = 1 - easeInOutCubic(d);
-    }
-    const { x, y, rot, scale } = this.motion(eased, this.intensity);
-    const blur = eased > 0.8 ? (eased - 0.8) * 10 : 0;
-    this.els.forEach(el => {
-      el.style.transform = `translate(${x}px, ${y}px) rotate(${rot}deg) scale(${scale})`;
-      el.style.filter = blur > 0 ? `blur(${blur.toFixed(1)}px)` : 'none';
-    });
-  }
-}
-
-buildPerformers();
-window.addEventListener('resize', buildPerformers);
+buildLimbs();
+window.addEventListener('resize', buildLimbs);
 
 /* ----------------------------------------------------------
    Main loop
@@ -367,16 +418,17 @@ function loop() {
 
   analyser.getByteFrequencyData(freqData);
   const now = performance.now();
-  const chaos = chaosRange.value / 100 * 1.8; // 0-1.8 multiplier, slider centered around 1x at ~55
+  const chaos = chaosRange.value / 100 * 1.8;
 
-  let debugLines = [];
-  for (const perf of performers) {
-    const energy = bandAvg(freqData, perf.bandStart, perf.bandEnd);
-    perf.maybeFire(energy, chaos, now);
-    perf.update(now);
-    debugLines.push(energy.toFixed(2));
+  const { busy, onsetCount, broadband } = detectOnsetAndBusyness(freqData, now);
+
+  for (const limb of limbs) {
+    limb.setMode(busy);
+    const energy = bandAvg(freqData, limb.bandStart, limb.bandEnd);
+    limb.update(energy, chaos, now);
   }
-  debugEl.textContent = `bands: ${debugLines.join(' / ')}`;
+
+  debugEl.textContent = `busy:${busy} onsets:${onsetCount} broadband:${broadband.toFixed(2)}`;
 }
 requestAnimationFrame(loop);
 </script>
